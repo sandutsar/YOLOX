@@ -6,7 +6,7 @@ our C++ demo does not include the model converting or constructing like other te
 
 ## Step 1: Prepare serialized engine file
 
-Follow the trt [python demo README](https://github.com/Megvii-BaseDetection/YOLOX/demo/TensorRT/python/README.md) to convert and save the serialized engine file.
+Follow the trt [python demo README](https://github.com/Megvii-BaseDetection/YOLOX/blob/main/demo/TensorRT/python/README.md) to convert and save the serialized engine file.
 
 Check the 'model_trt.engine' file generated from Step 1, which will be automatically saved at the current demo dir.
 
@@ -46,3 +46,13 @@ or
 ./yolox <path/to/your/engine_file> -i <path/to/image>
 ```
 
+NOTE: for `trtexec` users, modify `INPUT_BLOB_NAME` and `OUTPUT_BLOB_NAME` as the following code.
+```
+const char* INPUT_BLOB_NAME = "images";
+const char* OUTPUT_BLOB_NAME = "output";
+```
+
+Here is the command to convert the small onnx model to tensorrt engine file:
+```
+trtexec --onnx=yolox_s.onnx --saveEngine=yolox_s.trt
+```

@@ -3,16 +3,16 @@ numpy
 torch>=1.7
 opencv_python
 loguru
-scikit-image
 tqdm
 torchvision
-Pillow
 thop
 ninja
 tabulate
+psutil
 tensorboard
 
 # verified versions
-onnx==1.8.1
-onnxruntime==1.8.0
-onnx-simplifier==0.3.5
+# pycocotools corresponds to https://github.com/ppwwyyxx/cocoapi
+pycocotools>=2.0.2
+onnx>=1.13.0
+onnx-simplifier==0.4.10

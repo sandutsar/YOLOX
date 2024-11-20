@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-# -*- coding:utf-8 -*-
-# Copyright (c) 2014-2021 Megvii Inc. All rights reserved.
+# Copyright (c) Megvii Inc. All rights reserved.
 
 import numpy as np
 
@@ -15,6 +14,7 @@ __all__ = [
     "adjust_box_anns",
     "xyxy2xywh",
     "xyxy2cxcywh",
+    "cxcywh2xyxy",
 ]
 
 
@@ -29,7 +29,7 @@ def filter_box(output, scale_range):
     return output[keep]
 
 
-def postprocess(prediction, num_classes, conf_thre=0.7, nms_thre=0.45):
+def postprocess(prediction, num_classes, conf_thre=0.7, nms_thre=0.45, class_agnostic=False):
     box_corner = prediction.new(prediction.shape)
     box_corner[:, :, 0] = prediction[:, :, 0] - prediction[:, :, 2] / 2
     box_corner[:, :, 1] = prediction[:, :, 1] - prediction[:, :, 3] / 2
@@ -53,12 +53,20 @@ def postprocess(prediction, num_classes, conf_thre=0.7, nms_thre=0.45):
         if not detections.size(0):
             continue
 
-        nms_out_index = torchvision.ops.batched_nms(
-            detections[:, :4],
-            detections[:, 4] * detections[:, 5],
-            detections[:, 6],
-            nms_thre,
-        )
+        if class_agnostic:
+            nms_out_index = torchvision.ops.nms(
+                detections[:, :4],
+                detections[:, 4] * detections[:, 5],
+                nms_thre,
+            )
+        else:
+            nms_out_index = torchvision.ops.batched_nms(
+                detections[:, :4],
+                detections[:, 4] * detections[:, 5],
+                detections[:, 6],
+                nms_thre,
+            )
+
         detections = detections[nms_out_index]
         if output[i] is None:
             output[i] = detections
@@ -124,4 +132,12 @@ def xyxy2cxcywh(bboxes):
     bboxes[:, 3] = bboxes[:, 3] - bboxes[:, 1]
     bboxes[:, 0] = bboxes[:, 0] + bboxes[:, 2] * 0.5
     bboxes[:, 1] = bboxes[:, 1] + bboxes[:, 3] * 0.5
+    return bboxes
+
+
+def cxcywh2xyxy(bboxes):
+    bboxes[:, 0] = bboxes[:, 0] - bboxes[:, 2] * 0.5
+    bboxes[:, 1] = bboxes[:, 1] - bboxes[:, 3] * 0.5
+    bboxes[:, 2] = bboxes[:, 0] + bboxes[:, 2]
+    bboxes[:, 3] = bboxes[:, 1] + bboxes[:, 3]
     return bboxes

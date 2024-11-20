@@ -16,7 +16,7 @@ import numpy as np
 
 from yolox.evaluators.voc_eval import voc_eval
 
-from .datasets_wrapper import Dataset
+from .datasets_wrapper import CacheDataset, cache_read_img
 from .voc_classes import VOC_CLASSES
 
 
@@ -35,7 +35,9 @@ class AnnotationTransform(object):
     """
 
     def __init__(self, class_to_ind=None, keep_difficult=True):
-        self.class_to_ind = class_to_ind or dict(zip(VOC_CLASSES, range(len(VOC_CLASSES))))
+        self.class_to_ind = class_to_ind or dict(
+            zip(VOC_CLASSES, range(len(VOC_CLASSES)))
+        )
         self.keep_difficult = keep_difficult
 
     def __call__(self, target):
@@ -48,7 +50,11 @@ class AnnotationTransform(object):
         """
         res = np.empty((0, 5))
         for obj in target.iter("object"):
-            difficult = int(obj.find("difficult").text) == 1
+            difficult = obj.find("difficult")
+            if difficult is not None:
+                difficult = int(difficult.text) == 1
+            else:
+                difficult = False
             if not self.keep_difficult and difficult:
                 continue
             name = obj.find("name").text.strip()
@@ -57,7 +63,7 @@ class AnnotationTransform(object):
             pts = ["xmin", "ymin", "xmax", "ymax"]
             bndbox = []
             for i, pt in enumerate(pts):
-                cur_pt = int(bbox.find(pt).text) - 1
+                cur_pt = int(float(bbox.find(pt).text)) - 1
                 # scale height or width
                 # cur_pt = cur_pt / width if i % 2 == 0 else cur_pt / height
                 bndbox.append(cur_pt)
@@ -66,10 +72,14 @@ class AnnotationTransform(object):
             res = np.vstack((res, bndbox))  # [xmin, ymin, xmax, ymax, label_ind]
             # img_id = target.find('filename').text[:-4]
 
-        return res  # [[xmin, ymin, xmax, ymax, label_ind], ... ]
+        width = int(target.find("size").find("width").text)
+        height = int(target.find("size").find("height").text)
+        img_info = (height, width)
+
+        return res, img_info
 
 
-class VOCDetection(Dataset):
+class VOCDetection(CacheDataset):
 
     """
     VOC Detection Dataset Object
@@ -91,13 +101,14 @@ class VOCDetection(Dataset):
     def __init__(
         self,
         data_dir,
-        image_sets=[('2007', 'trainval'), ('2012', 'trainval')],
+        image_sets=[("2007", "trainval"), ("2012", "trainval")],
         img_size=(416, 416),
         preproc=None,
         target_transform=AnnotationTransform(),
         dataset_name="VOC0712",
+        cache=False,
+        cache_type="ram",
     ):
-        super().__init__(img_size)
         self.root = data_dir
         self.image_set = image_sets
         self.img_size = img_size
@@ -107,6 +118,10 @@ class VOCDetection(Dataset):
         self._annopath = os.path.join("%s", "Annotations", "%s.xml")
         self._imgpath = os.path.join("%s", "JPEGImages", "%s.jpg")
         self._classes = VOC_CLASSES
+        self.cats = [
+            {"id": idx, "name": val} for idx, val in enumerate(VOC_CLASSES)
+        ]
+        self.class_ids = list(range(len(VOC_CLASSES)))
         self.ids = list()
         for (year, name) in image_sets:
             self._year = year
@@ -115,17 +130,68 @@ class VOCDetection(Dataset):
                 os.path.join(rootpath, "ImageSets", "Main", name + ".txt")
             ):
                 self.ids.append((rootpath, line.strip()))
+        self.num_imgs = len(self.ids)
+
+        self.annotations = self._load_coco_annotations()
+
+        path_filename = [
+            (self._imgpath % self.ids[i]).split(self.root + "/")[1]
+            for i in range(self.num_imgs)
+        ]
+        super().__init__(
+            input_dimension=img_size,
+            num_imgs=self.num_imgs,
+            data_dir=self.root,
+            cache_dir_name=f"cache_{self.name}",
+            path_filename=path_filename,
+            cache=cache,
+            cache_type=cache_type
+        )
 
     def __len__(self):
-        return len(self.ids)
+        return self.num_imgs
 
-    def load_anno(self, index):
+    def _load_coco_annotations(self):
+        return [self.load_anno_from_ids(_ids) for _ids in range(self.num_imgs)]
+
+    def load_anno_from_ids(self, index):
         img_id = self.ids[index]
         target = ET.parse(self._annopath % img_id).getroot()
-        if self.target_transform is not None:
-            target = self.target_transform(target)
 
-        return target
+        assert self.target_transform is not None
+        res, img_info = self.target_transform(target)
+        height, width = img_info
+
+        r = min(self.img_size[0] / height, self.img_size[1] / width)
+        res[:, :4] *= r
+        resized_info = (int(height * r), int(width * r))
+
+        return (res, img_info, resized_info)
+
+    def load_anno(self, index):
+        return self.annotations[index][0]
+
+    def load_resized_img(self, index):
+        img = self.load_image(index)
+        r = min(self.img_size[0] / img.shape[0], self.img_size[1] / img.shape[1])
+        resized_img = cv2.resize(
+            img,
+            (int(img.shape[1] * r), int(img.shape[0] * r)),
+            interpolation=cv2.INTER_LINEAR,
+        ).astype(np.uint8)
+
+        return resized_img
+
+    def load_image(self, index):
+        img_id = self.ids[index]
+        img = cv2.imread(self._imgpath % img_id, cv2.IMREAD_COLOR)
+        assert img is not None, f"file named {self._imgpath % img_id} not found"
+
+        return img
+
+    @cache_read_img(use_cache=True)
+    def read_img(self, index):
+        return self.load_resized_img(index)
 
     def pull_item(self, index):
         """Returns the original image and target at an index for mixup
@@ -138,17 +204,12 @@ class VOCDetection(Dataset):
         Return:
             img, target
         """
-        img_id = self.ids[index]
-        img = cv2.imread(self._imgpath % img_id, cv2.IMREAD_COLOR)
-        height, width, _ = img.shape
-
-        target = self.load_anno(index)
-
-        img_info = (height, width)
+        target, img_info, _ = self.annotations[index]
+        img = self.read_img(index)
 
         return img, target, img_info, index
 
-    @Dataset.resize_getitem
+    @CacheDataset.mosaic_getitem
     def __getitem__(self, index):
         img, target, img_info, img_id = self.pull_item(index)
 
@@ -167,7 +228,9 @@ class VOCDetection(Dataset):
         all_boxes[class][image] = [] or np.array of shape #dets x 5
         """
         self._write_voc_results_file(all_boxes)
-        IouTh = np.linspace(0.5, 0.95, int(np.round((0.95 - 0.5) / 0.05)) + 1, endpoint=True)
+        IouTh = np.linspace(
+            0.5, 0.95, int(np.round((0.95 - 0.5) / 0.05)) + 1, endpoint=True
+        )
         mAPs = []
         for iou in IouTh:
             mAP = self._do_python_eval(output_dir, iou)

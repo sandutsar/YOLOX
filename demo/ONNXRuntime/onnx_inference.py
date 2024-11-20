@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 # Copyright (c) Megvii, Inc. and its affiliates.
 
 import argparse
@@ -51,11 +50,6 @@ def make_parser():
         default="640,640",
         help="Specify an input shape for inference.",
     )
-    parser.add_argument(
-        "--with_p6",
-        action="store_true",
-        help="Whether your model uses p6 in FPN/PAN.",
-    )
     return parser
 
 
@@ -64,15 +58,13 @@ if __name__ == '__main__':
 
     input_shape = tuple(map(int, args.input_shape.split(',')))
     origin_img = cv2.imread(args.image_path)
-    mean = (0.485, 0.456, 0.406)
-    std = (0.229, 0.224, 0.225)
-    img, ratio = preprocess(origin_img, input_shape, mean, std)
+    img, ratio = preprocess(origin_img, input_shape)
 
     session = onnxruntime.InferenceSession(args.model)
 
     ort_inputs = {session.get_inputs()[0].name: img[None, :, :, :]}
     output = session.run(None, ort_inputs)
-    predictions = demo_postprocess(output[0], input_shape, p6=args.with_p6)[0]
+    predictions = demo_postprocess(output[0], input_shape)[0]
 
     boxes = predictions[:, :4]
     scores = predictions[:, 4:5] * predictions[:, 5:]
@@ -90,5 +82,5 @@ if __name__ == '__main__':
                          conf=args.score_thr, class_names=COCO_CLASSES)
 
     mkdir(args.output_dir)
-    output_path = os.path.join(args.output_dir, args.image_path.split("/")[-1])
+    output_path = os.path.join(args.output_dir, os.path.basename(args.image_path))
     cv2.imwrite(output_path, origin_img)
